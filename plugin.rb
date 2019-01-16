@@ -1,6 +1,6 @@
 # name: discourse-translator
 # about: Provides inline translation of posts.
-# version: 0.1.6
+# version: 0.2.0
 # authors: Alan Tan
 # url: https://github.com/tgxworld/discourse-translator
 
@@ -24,7 +24,7 @@ after_initialize do
 
   require_dependency "application_controller"
   class DiscourseTranslator::TranslatorController < ::ApplicationController
-    before_filter :ensure_logged_in
+    before_action :ensure_logged_in
 
     def translate
       raise PluginDisabled if !SiteSetting.translator_enabled
@@ -60,7 +60,39 @@ after_initialize do
   end
 
   require_dependency "jobs/base"
+
   module ::Jobs
+    class TranslatorMigrateToAzurePortal < Jobs::Onceoff
+      def execute_onceoff(args)
+        ["translator_client_id", "translator_client_secret"].each do |name|
+
+          sql = <<~SQL
+          DELETE FROM site_settings WHERE name = '#{name}'
+          SQL
+
+          # TODO: post Discourse 2.1 remove switch
+          if defined? DB
+            DB.exec sql
+          else
+            SiteSetting.exec_sql sql
+          end
+        end
+
+        sql = <<~SQL
+          UPDATE site_settings
+          SET name = 'translator_azure_subscription_key'
+          WHERE name = 'azure_subscription_key'
+        SQL
+
+        # TODO: post Discourse 2.1 remove switch
+        if defined? DB
+          DB.exec sql
+        else
+          SiteSetting.exec_sql sql
+        end
+      end
+    end
+
     class DetectTranslation < Jobs::Base
       sidekiq_options retry: false
 
@@ -81,7 +113,7 @@ after_initialize do
 
   def post_process(post)
     return if !SiteSetting.translator_enabled
-    Jobs.enqueue(:detect_translation, { post_id: post.id })
+    Jobs.enqueue(:detect_translation, post_id: post.id)
   end
   listen_for :post_process
 
@@ -99,7 +131,7 @@ after_initialize do
       detected_lang = post_custom_fields[::DiscourseTranslator::DETECTED_LANG_CUSTOM_FIELD]
 
       if !detected_lang
-        Jobs.enqueue(:detect_translation, { post_id: object.id })
+        Jobs.enqueue(:detect_translation, post_id: object.id)
         false
       else
         detected_lang != "DiscourseTranslator::#{SiteSetting.translator}::SUPPORTED_LANG".constantize[I18n.locale]

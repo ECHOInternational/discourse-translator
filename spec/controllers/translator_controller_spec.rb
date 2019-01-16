@@ -15,8 +15,8 @@ RSpec.describe ::DiscourseTranslator::TranslatorController do
   describe "#translate" do
     describe 'anon user' do
       it 'should not allow translation of posts' do
-        expect{ xhr :post, :translate, { post_id: 1 } }
-          .to raise_error Discourse::NotLoggedIn
+        post :translate, params: { post_id: 1 }, format: :json
+        expect(response.status).to eq(403)
       end
     end
 
@@ -27,7 +27,7 @@ RSpec.describe ::DiscourseTranslator::TranslatorController do
         before { SiteSetting.translator_enabled = false }
 
         it 'should deny request to translate' do
-          response = xhr :post, :translate, { post_id: 1 }
+          response = post :translate, params: { post_id: 1 }, format: :json
 
           expect(response.status).to eq(404)
         end
@@ -37,19 +37,19 @@ RSpec.describe ::DiscourseTranslator::TranslatorController do
         let(:reply) { Fabricate(:post) }
 
         it 'raises an error with a missing parameter' do
-          expect{ xhr :post, :translate }
-            .to raise_error(ActionController::ParameterMissing)
+          post :translate, format: :json
+          expect(response.status).to eq(400)
         end
 
         it 'raises the right error when post_id is invalid' do
-          expect { xhr :post, :translate, post_id: -1 }
-            .to raise_error(Discourse::InvalidParameters)
+          post :translate, params: { post_id: -1 }, format: :json
+          expect(response.status).to eq(400)
         end
 
         it 'rescues translator errors' do
           DiscourseTranslator::Microsoft.expects(:translate).raises(::DiscourseTranslator::TranslatorError)
 
-          xhr :post, :translate, { post_id: reply.id }
+          post :translate, params: { post_id: reply.id }, format: :json
 
           expect(response).to have_http_status(422)
         end
@@ -57,9 +57,9 @@ RSpec.describe ::DiscourseTranslator::TranslatorController do
         it 'returns the translated text' do
           DiscourseTranslator::Microsoft.expects(:translate).with(reply).returns(['ja', 'ニャン猫'])
 
-          xhr :post, :translate, { post_id: reply.id }
+          post :translate, params: { post_id: reply.id }, format: :json
 
-          expect(response).to be_success
+          expect(response).to be_successful
           expect(response.body).to eq({ translation: 'ニャン猫', detected_lang: 'ja' }.to_json)
         end
       end

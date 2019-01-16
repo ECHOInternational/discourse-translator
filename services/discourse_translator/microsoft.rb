@@ -54,34 +54,17 @@ module DiscourseTranslator
       if existing_token
         return existing_token
       else
-        if !SiteSetting.azure_subscription_key.blank?
-          response = Excon.post("#{ISSUE_TOKEN_URI}?Subscription-Key=#{SiteSetting.azure_subscription_key}")
+        if !SiteSetting.translator_azure_subscription_key.blank?
+          response = Excon.post("#{ISSUE_TOKEN_URI}?Subscription-Key=#{SiteSetting.translator_azure_subscription_key}")
 
-          if response.status == 200
-            token = response.body
-            $redis.setex(cache_key, 8.minutes, token)
-            token
+          if response.status == 200 && (response_body = response.body).present?
+            $redis.setex(cache_key, 8.minutes.to_i, response_body)
+            response_body
+          elsif response.body.blank?
+            raise TranslatorError.new(I18n.t("translator.microsoft.missing_token"))
           else
             body = JSON.parse(response.body)
             raise TranslatorError.new("#{body['statusCode']}: #{body['message']}")
-          end
-        else
-          body = URI.encode_www_form(
-            client_id: SiteSetting.translator_client_id,
-            client_secret: SiteSetting.translator_client_secret,
-            scope: SCOPE_URI,
-            grant_type: GRANT_TYPE
-          )
-
-          response = post(DATA_URI, body, { "Content-Type" => "application/x-www-form-urlencoded" })
-          body = JSON.parse(response.body)
-
-          if response.status == 200
-            existing_token = body["access_token"]
-            $redis.setex(cache_key, body["expires_in"].to_i - 1.minute, existing_token)
-            existing_token
-          else
-            raise TranslatorError.new("#{body['error']}: #{body['error_description']}")
           end
         end
       end
@@ -89,15 +72,15 @@ module DiscourseTranslator
 
     def self.detect(post)
       post.custom_fields[DiscourseTranslator::DETECTED_LANG_CUSTOM_FIELD] ||= begin
-        text = CGI.escapeHTML(post.raw.truncate(LENGTH_LIMIT))
+        text = escape(post.raw).truncate(LENGTH_LIMIT)
 
-        body = <<-XML.strip_heredoc
+        body = <<~XML
         <ArrayOfstring xmlns="http://schemas.microsoft.com/2003/10/Serialization/Arrays" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
           <string>#{text}</string>
         </ArrayOfstring>
         XML
 
-        xml_doc = result(DETECT_URI, body, default_headers.merge({ 'Content-Type' => 'text/xml' }))
+        xml_doc = result(DETECT_URI, body, default_headers.merge('Content-Type' => 'text/xml'))
         Nokogiri::XML(xml_doc).remove_namespaces!.xpath("//string").text
       end
     end
@@ -114,7 +97,7 @@ module DiscourseTranslator
       raise TranslatorError.new(I18n.t('translator.too_long')) if post.cooked.length > LENGTH_LIMIT
 
       translated_text = from_custom_fields(post) do
-        body = <<-XML.strip_heredoc
+        body = <<~XML
         <GetTranslationsArrayRequest>
           <AppId></AppId>
           <From>#{detected_lang}</From>
@@ -122,14 +105,14 @@ module DiscourseTranslator
             <ContentType xmlns="http://schemas.datacontract.org/2004/07/Microsoft.MT.Web.Service.V2">text/html</ContentType>
           </Options>
           <Texts>
-            <string xmlns="http://schemas.microsoft.com/2003/10/Serialization/Arrays">#{CGI.escapeHTML(post.cooked)}</string>
+            <string xmlns="http://schemas.microsoft.com/2003/10/Serialization/Arrays">#{escape(post.cooked)}</string>
           </Texts>
           <To>#{locale}</To>
           <MaxTranslations>1</MaxTranslations>
         </GetTranslationsArrayRequest>
         XML
 
-        xml_doc = result(TRANSLATE_URI, body, default_headers.merge({ 'Content-Type' => 'text/xml' }))
+        xml_doc = result(TRANSLATE_URI, body, default_headers.merge('Content-Type' => 'text/xml'))
         Nokogiri::XML(xml_doc).remove_namespaces!.xpath("//TranslatedText").text
       end
 
@@ -147,7 +130,7 @@ module DiscourseTranslator
     end
 
     def self.result(uri, body, headers)
-      response  = post(uri, body, headers)
+      response = post(uri, body, headers)
       response_body = response.body
 
       if response.status != 200
@@ -159,6 +142,10 @@ module DiscourseTranslator
 
     def self.default_headers
       { 'Authorization' => "Bearer #{access_token}" }
+    end
+
+    def self.escape(text)
+      CGI.escapeHTML(text.gsub(/[^[:print:][:space:]]/, ""))
     end
   end
 end

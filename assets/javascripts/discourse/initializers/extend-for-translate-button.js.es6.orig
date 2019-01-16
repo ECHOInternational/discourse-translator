@@ -3,9 +3,15 @@ import { withPluginApi } from "discourse/lib/plugin-api";
 import { ajax } from "discourse/lib/ajax";
 
 function translatePost(post) {
+<<<<<<< HEAD
   return ajax('/translator/translate', {
     type: 'POST',
     data: { post_id: post.get('id'), locale: I18n.locale }
+=======
+  return ajax("/translator/translate", {
+    type: "POST",
+    data: { post_id: post.get("id") }
+>>>>>>> ffebb3c95b4c8e0383a305fc8d9af4ed401e943b
   }).then(function(res) {
     post.setProperties({
       translated_text: res.translation,
